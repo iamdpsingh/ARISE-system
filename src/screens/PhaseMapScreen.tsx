@@ -22,9 +22,16 @@ export default function PhaseMapScreen({ state, onAdvancePhase }: Props) {
           const isCurrent = state.currentPhase === idx;
           const isLocked = !isCompleted && !isCurrent;
           const rankColor = RANK_COLORS[phase.rank] ?? COLORS.cyan;
-          const requiredDays = PHASES
-            .slice(0, idx + 1)
+          const phaseRequiredDays = phase.durationWeeks * 7;
+          const phaseStartDayOffset = PHASES
+            .slice(0, idx)
             .reduce((sum, item) => sum + item.durationWeeks * 7, 0);
+          const requiredDays = phaseStartDayOffset + phaseRequiredDays;
+          const phaseCompletedDays = Math.max(
+            0,
+            Math.min(phaseRequiredDays, state.totalDaysCompleted - phaseStartDayOffset)
+          );
+          const phaseProgressPercent = Math.round((phaseCompletedDays / phaseRequiredDays) * 100);
 
           return (
             <View key={idx} style={[
@@ -56,8 +63,12 @@ export default function PhaseMapScreen({ state, onAdvancePhase }: Props) {
                     <Text style={[styles.rankPill, { color: rankColor, borderColor: rankColor }]}>
                       {phase.rank}-RANK
                     </Text>
-                    <Text style={styles.duration}>{phase.duration}</Text>
+                    <Text style={styles.duration}>{phase.duration} • {phaseRequiredDays} DAYS</Text>
                   </View>
+                  <Text style={styles.phaseProgressText}>
+                    {isCompleted ? `DAY ${phaseRequiredDays}/${phaseRequiredDays}` : `DAY ${phaseCompletedDays}/${phaseRequiredDays}`}
+                    {isCurrent ? `  •  ${phaseProgressPercent}% COMPLETE` : ''}
+                  </Text>
                 </View>
               </View>
 
@@ -160,6 +171,7 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   rankPill: { ...FONTS.mono, fontSize: 10, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2 },
   duration: { ...FONTS.body, color: COLORS.textSub, fontSize: 11 },
+  phaseProgressText: { ...FONTS.mono, color: COLORS.cyanDim, fontSize: 10, marginTop: 6 },
 
   activePill: { marginLeft: 8, backgroundColor: COLORS.cyanGlow, borderWidth: 1, borderColor: COLORS.cyan, paddingHorizontal: 8, paddingVertical: 2 },
   activePillText: { ...FONTS.system, color: COLORS.cyan, fontSize: 8, letterSpacing: 2 },

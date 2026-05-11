@@ -96,7 +96,13 @@ const RANK_LEVELS: { level: number; rank: SystemRank; title: string }[] = [
 
 const XP_FOR_LEVEL = (level: number) => Math.floor(100 * Math.pow(1.4, level - 1));
 
-const todayStr = () => new Date().toISOString().split('T')[0];
+const todayStr = () => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
 
 const INITIAL_TODAY = (): DailyState => ({
   date: todayStr(),
