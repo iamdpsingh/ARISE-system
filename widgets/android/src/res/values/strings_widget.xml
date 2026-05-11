@@ -5,4 +5,8 @@
   <string name="arise_widget_default_meta">LV 1  •  E-RANK  •  PHASE 0</string>
   <string name="arise_widget_default_status">MISSION IN PROGRESS</string>
   <string name="arise_widget_description">ARISE status and streak widget</string>
+  <string name="arise_quest_widget_description">Daily quest progress widget</string>
+  <string name="arise_nutrition_widget_description">Calories, protein, and meal log widget</string>
+  <string name="arise_water_widget_description">Water intake progress widget</string>
+  <string name="arise_timetable_widget_description">Current and next timetable slot widget</string>
 </resources>

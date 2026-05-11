@@ -21,9 +21,11 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginTop="6dp"
+    android:ellipsize="end"
+    android:maxLines="2"
     android:text="@string/arise_widget_default_name"
     android:textColor="@color/arise_text_primary"
-    android:textSize="17sp"
+    android:textSize="15sp"
     android:textStyle="bold" />
 
   <TextView
@@ -31,6 +33,8 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginTop="4dp"
+    android:ellipsize="end"
+    android:maxLines="2"
     android:text="@string/arise_widget_default_meta"
     android:textColor="@color/arise_text_secondary"
     android:textSize="11sp" />
@@ -40,6 +44,8 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginTop="8dp"
+    android:ellipsize="end"
+    android:maxLines="2"
     android:text="@string/arise_widget_default_status"
     android:textColor="@color/arise_success"
     android:textSize="11sp"

@@ -56,6 +56,22 @@
               {
                 "name": "AriseSystemWidget",
                 "resourceName": "@xml/arise_system_widget_info"
+              },
+              {
+                "name": "AriseQuestWidget",
+                "resourceName": "@xml/arise_quest_widget_info"
+              },
+              {
+                "name": "AriseNutritionWidget",
+                "resourceName": "@xml/arise_nutrition_widget_info"
+              },
+              {
+                "name": "AriseWaterWidget",
+                "resourceName": "@xml/arise_water_widget_info"
+              },
+              {
+                "name": "AriseTimetableWidget",
+                "resourceName": "@xml/arise_timetable_widget_info"
               }
             ],
             "distPlaceholder": "package_name"

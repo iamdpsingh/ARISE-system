@@ -5,5 +5,9 @@ import WidgetKit
 struct AriseSystemWidgetBundle: WidgetBundle {
   var body: some Widget {
     AriseSystemWidget()
+    AriseQuestWidget()
+    AriseNutritionWidget()
+    AriseWaterWidget()
+    AriseTimetableWidget()
   }
 }

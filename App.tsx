@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, Platform } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, Platform } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -13,6 +13,7 @@ import SystemAlert from './src/components/SystemAlert';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import StatusScreen from './src/screens/StatusScreen';
 import DailyQuestScreen from './src/screens/DailyQuestScreen';
+import TimetableScreen from './src/screens/TimetableScreen';
 import NutritionScreen from './src/screens/NutritionScreen';
 import PhaseMapScreen from './src/screens/PhaseMapScreen';
 import HealthScreen from './src/screens/HealthScreen';
@@ -20,12 +21,12 @@ import {
   requestNotificationPermissions,
   scheduleAllNotifications,
   sendPenaltyAlert,
-  sendLevelUpNotification,
 } from './src/notifications/scheduler';
 import { pushLogToGithub } from './src/services/githubService';
 import SettingsModal from './src/components/SettingsModal';
 import HistoryScreen from './src/screens/HistoryScreen';
 import type { TimeBlock } from './src/data/timetable';
+import { PHASES } from './src/data/phases';
 
 // ── Notification handler ────────────────────────────────────
 Notifications.setNotificationHandler({
@@ -49,10 +50,91 @@ const NAV_THEME = {
 const TAB_ICONS: Record<string, string> = {
   Status: '⚔',
   Quest: '📋',
+  Timetable: '⏰',
   Records: '📜',
   Nutrition: '🍽',
   Phases: '🗺',
   Health: '💊',
+};
+
+const TAB_LABELS: Record<string, string> = {
+  Status: 'STATUS',
+  Quest: 'QUEST',
+  Timetable: 'TABLE',
+  Records: 'LOGS',
+  Nutrition: 'FOOD',
+  Phases: 'PHASES',
+  Health: 'HEALTH',
+};
+
+const localDateString = () => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const parseClockTimeToMinutes = (value?: string) => {
+  if (!value) return null;
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const ampm = match[3].toUpperCase();
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 1 || hours > 12 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  if (hours === 12) hours = 0;
+  if (ampm === 'PM') hours += 12;
+  return (hours * 60) + minutes;
+};
+
+const resolveTimetableWidgetLines = (timetable: TimeBlock[]) => {
+  const cleanedSlots = (timetable || [])
+    .map(slot => {
+      const startMinutes = parseClockTimeToMinutes(slot.start);
+      const endMinutes = parseClockTimeToMinutes(slot.end);
+      return {
+        start: slot.start?.trim() || '',
+        end: slot.end?.trim() || '',
+        task: slot.task?.trim() || '',
+        startMinutes,
+        endMinutes: endMinutes ?? (startMinutes !== null ? Math.min(startMinutes + 60, 24 * 60) : null),
+      };
+    })
+    .filter(slot => slot.start && slot.task && slot.startMinutes !== null)
+    .sort((a, b) => (a.startMinutes ?? 0) - (b.startMinutes ?? 0));
+
+  if (cleanedSlots.length === 0) {
+    return {
+      current: 'No valid slots',
+      next: 'Use TIMETABLE tab',
+    };
+  }
+
+  const now = new Date();
+  const nowMinutes = (now.getHours() * 60) + now.getMinutes();
+
+  const activeSlot = cleanedSlots.find(slot => {
+    if (slot.startMinutes === null || slot.endMinutes === null) return false;
+    return nowMinutes >= slot.startMinutes && nowMinutes < slot.endMinutes;
+  });
+
+  const upcomingSlot =
+    cleanedSlots.find(slot => slot.startMinutes !== null && slot.startMinutes > nowMinutes) || cleanedSlots[0];
+
+  const current = activeSlot
+    ? `${activeSlot.start}${activeSlot.end ? `-${activeSlot.end}` : ''} ${activeSlot.task}`
+    : 'No active slot';
+  const next = upcomingSlot
+    ? `${upcomingSlot.start}${upcomingSlot.end ? `-${upcomingSlot.end}` : ''} ${upcomingSlot.task}`
+    : 'No upcoming slot';
+
+  return { current, next };
 };
 
 // ── Main App ────────────────────────────────────────────────
@@ -66,7 +148,7 @@ export default function App() {
     completeDailyAll, setName, advancePhase,
     resetState,
     setGithubConfig, clearGithubConfig, setTimetable, resetTimetable,
-    todayCalories, todayProtein, waterPercent, xpPercent, routinesDone,
+    todayCalories, todayProtein, waterPercent, xpPercent,
   } = usePlayerState();
 
   const [alert, setAlert] = useState<{ visible: boolean; title: string; message: string; type?: any }>({
@@ -90,6 +172,19 @@ export default function App() {
   useEffect(() => {
     if (!loaded || !state.setupComplete) return;
 
+    const routineDone = [
+      state.today.breathingDone,
+      state.today.steamDone,
+      state.today.sunlightDone,
+      state.today.walkDone,
+    ].filter(Boolean).length;
+    const phaseSchedule = PHASES[state.currentPhase]?.schedule || [];
+    const currentDayIdx = new Date().getDay();
+    const mappedDayIdx = phaseSchedule.length > 0 ? currentDayIdx % phaseSchedule.length : 0;
+    const currentDay = phaseSchedule[mappedDayIdx];
+    const trainingDone = !!state.today.questsCompleted[`day_${mappedDayIdx}`] || currentDay?.type === 'rest';
+    const { current, next } = resolveTimetableWidgetLines(state.timetable);
+
     const payload = JSON.stringify({
       name: state.name || 'HUNTER',
       level: state.level,
@@ -97,6 +192,26 @@ export default function App() {
       phase: state.currentPhase,
       streak: state.streakDays,
       status: state.today.allDailyCompleted ? 'MISSION COMPLETE' : 'MISSION IN PROGRESS',
+      quest: {
+        routineDone,
+        routineTotal: 4,
+        trainingDone,
+        allDone: state.today.allDailyCompleted,
+      },
+      nutrition: {
+        calories: Math.round(todayCalories),
+        protein: Number(todayProtein.toFixed(1)),
+        meals: state.today.meals.length,
+      },
+      water: {
+        currentMl: state.today.waterMl,
+        targetMl: state.today.targetWaterMl,
+        percent: Math.round(waterPercent),
+      },
+      timetable: {
+        current,
+        next,
+      },
     });
 
     try {
@@ -115,12 +230,12 @@ export default function App() {
       // Widget module may be unavailable in Expo Go; ignore gracefully.
       console.log('Widget sync skipped:', error);
     }
-  }, [loaded, state]);
+  }, [loaded, state, todayCalories, todayProtein, waterPercent]);
 
   // ── Penalty alert for missed days ──────────────────────
   useEffect(() => {
     if (!loaded || !state.setupComplete) return;
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDateString();
     if (state.lastActiveDate && state.lastActiveDate !== today) {
       const missed = Math.floor(
         (new Date(today).getTime() - new Date(state.lastActiveDate).getTime()) / 86400000
@@ -249,10 +364,10 @@ export default function App() {
               ...FONTS.system,
               color: focused ? COLORS.cyan : COLORS.textSub,
               fontSize: 9,
-              letterSpacing: 1.5,
+              letterSpacing: 1,
               marginBottom: Platform.OS === 'ios' ? 0 : 4,
             }}>
-              {route.name.toUpperCase()}
+              {TAB_LABELS[route.name] || route.name.toUpperCase()}
             </Text>
           ),
           tabBarActiveTintColor: COLORS.cyan,
@@ -280,8 +395,6 @@ export default function App() {
           {() => (
             <DailyQuestScreen
               state={state}
-              timetable={state.timetable}
-              routinesDone={routinesDone}
               onMarkRoutine={handleMarkRoutine}
               onCompleteExercise={handleCompleteExercise}
               onCompleteDailyAll={handleCompleteDailyAll}
@@ -289,6 +402,14 @@ export default function App() {
               onLogSymptoms={logSymptoms}
               onLogSleep={logSleep}
               onEmergency={() => setShowEmergency(true)}
+            />
+          )}
+        </Tab.Screen>
+
+        <Tab.Screen name="Timetable">
+          {() => (
+            <TimetableScreen
+              timetable={state.timetable}
               onSaveTimetable={handleSaveTimetable}
               onResetTimetable={handleResetTimetable}
             />

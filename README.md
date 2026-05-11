@@ -8,14 +8,17 @@ Repository: https://github.com/iamdpsingh/ARISE-system
 ## Core Features
 
 - Solo Leveling themed system UI (status, quests, phases, health, history)
-- Editable daily timetable (add/edit/remove/reset slots)
+- Separate Timetable tab with full add/edit/remove/reset controls
 - Daily routine + workout completion with XP/level system
 - Phase map with locked phase preview (details visible before unlock)
 - Missed day does not reset whole progression anymore
 - GitHub mission log upload with in-app "Test Log Upload Now"
 - Home-screen widgets:
-  - Android App Widget
-  - iOS Widget Extension
+  - Status
+  - Quest
+  - Nutrition
+  - Water Intake
+  - Timetable
 
 ## Tech Stack
 
@@ -81,15 +84,19 @@ Then tap `TEST LOG UPLOAD NOW` to verify upload.
 
 ## Build Prerequisites
 
-### Android APK (EAS Cloud Build)
+### Android APK (EAS Local Build)
 
 - EAS login required: `eas login`
-- Android Studio is not required for cloud build
+- Java 17 required
+- Android SDK required (with `platform-tools`, platform API, and build-tools)
 
 Build command:
 
 ```bash
-eas build -p android --profile preview
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+export ANDROID_HOME=$HOME/Library/Android/sdk
+export ANDROID_SDK_ROOT=$ANDROID_HOME
+eas build -p android --local --profile preview
 ```
 
 ### iOS IPA (EAS Cloud Build)
