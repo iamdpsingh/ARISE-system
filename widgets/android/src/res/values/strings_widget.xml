@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="arise_widget_title">ARISE SYSTEM</string>
+  <string name="arise_widget_default_name">HUNTER</string>
+  <string name="arise_widget_default_meta">LV 1  •  E-RANK  •  PHASE 0</string>
+  <string name="arise_widget_default_status">MISSION IN PROGRESS</string>
+  <string name="arise_widget_description">ARISE status and streak widget</string>
+</resources>

@@ -1,0 +1,76 @@
+{
+  "expo": {
+    "name": "ARISE: The System",
+    "slug": "arise-system",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "backgroundColor": "#05070a",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#05070a"
+    },
+    "ios": {
+      "bundleIdentifier": "com.arise.system",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.arise.system",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#05070a"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "SCHEDULE_EXACT_ALARM"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#00f3ff",
+          "sounds": []
+        }
+      ],
+      [
+        "@bittingz/expo-widgets",
+        {
+          "ios": {
+            "src": "./widgets/ios",
+            "mode": "production"
+          },
+          "android": {
+            "src": "./widgets/android",
+            "widgets": [
+              {
+                "name": "AriseSystemWidget",
+                "resourceName": "@xml/arise_system_widget_info"
+              }
+            ],
+            "distPlaceholder": "package_name"
+          }
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "29eba381-fa6e-4c1a-a6fb-c20ebe2038b4"
+      }
+    },
+    "owner": "dps.s.code"
+  }
+}
