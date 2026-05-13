@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, StatusBar, Platform } from 'react-native';
+import { AppState, View, Text, StyleSheet, StatusBar, Platform } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -22,7 +22,8 @@ import {
   scheduleAllNotifications,
   sendPenaltyAlert,
 } from './src/notifications/scheduler';
-import { pushLogToGithub } from './src/services/githubService';
+import { registerLogBackgroundTask } from './src/services/backgroundLogTask';
+import { diffLocalDates, getScheduleIndexForPhaseDay, msUntilNextLocalMidnight } from './src/services/dailyLogService';
 import SettingsModal from './src/components/SettingsModal';
 import HistoryScreen from './src/screens/HistoryScreen';
 import type { TimeBlock } from './src/data/timetable';
@@ -145,10 +146,12 @@ export default function App() {
     addWater, logMeal, removeMeal,
     completeQuest, markRoutine,
     logSleep, logEnergy, logSymptoms,
-    completeDailyAll, setName, advancePhase,
+    completeDailyAll, markRestDay, setName, advancePhase,
     resetState,
+    runDailyMaintenance, uploadPendingLogs,
     setGithubConfig, clearGithubConfig, setTimetable, resetTimetable,
     todayCalories, todayProtein, waterPercent, xpPercent,
+    currentAppDay, currentPhaseDay, pendingUploadCount,
   } = usePlayerState();
 
   const [alert, setAlert] = useState<{ visible: boolean; title: string; message: string; type?: any }>({
@@ -157,7 +160,7 @@ export default function App() {
   const [showEmergency, setShowEmergency] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [testingSync, setTestingSync] = useState(false);
+  const [uploadingLogs, setUploadingLogs] = useState(false);
 
   // ── Set up notifications on first load ─────────────────
   useEffect(() => {
@@ -179,10 +182,9 @@ export default function App() {
       state.today.walkDone,
     ].filter(Boolean).length;
     const phaseSchedule = PHASES[state.currentPhase]?.schedule || [];
-    const currentDayIdx = new Date().getDay();
-    const mappedDayIdx = phaseSchedule.length > 0 ? currentDayIdx % phaseSchedule.length : 0;
+    const mappedDayIdx = getScheduleIndexForPhaseDay(state.currentPhase, state.currentPhaseDay);
     const currentDay = phaseSchedule[mappedDayIdx];
-    const trainingDone = !!state.today.questsCompleted[`day_${mappedDayIdx}`] || currentDay?.type === 'rest';
+    const trainingDone = !!state.today.questsCompleted[`day_${mappedDayIdx}`] || currentDay?.type === 'rest' || state.today.restDay;
     const { current, next } = resolveTimetableWidgetLines(state.timetable);
 
     const payload = JSON.stringify({
@@ -190,8 +192,10 @@ export default function App() {
       level: state.level,
       rank: state.rank,
       phase: state.currentPhase,
+      phaseDay: state.currentPhaseDay,
+      appDay: currentAppDay,
       streak: state.streakDays,
-      status: state.today.allDailyCompleted ? 'MISSION COMPLETE' : 'MISSION IN PROGRESS',
+      status: state.today.restDay ? 'REST DAY' : state.today.allDailyCompleted ? 'MISSION COMPLETE' : 'MISSION IN PROGRESS',
       quest: {
         routineDone,
         routineTotal: 4,
@@ -230,16 +234,55 @@ export default function App() {
       // Widget module may be unavailable in Expo Go; ignore gracefully.
       console.log('Widget sync skipped:', error);
     }
-  }, [loaded, state, todayCalories, todayProtein, waterPercent]);
+  }, [loaded, state, todayCalories, todayProtein, waterPercent, currentAppDay]);
+
+  // ── Daily log rollover and retry uploads ───────────────
+  useEffect(() => {
+    if (!loaded || !state.setupComplete) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const runMaintenance = async () => {
+      if (cancelled) return;
+      setSyncing(true);
+      try {
+        await registerLogBackgroundTask();
+        await runDailyMaintenance();
+      } catch (error) {
+        console.log('Daily log maintenance failed:', error);
+      } finally {
+        if (!cancelled) setSyncing(false);
+      }
+    };
+
+    const scheduleMidnightCheck = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        await runMaintenance();
+        scheduleMidnightCheck();
+      }, msUntilNextLocalMidnight());
+    };
+
+    runMaintenance();
+    scheduleMidnightCheck();
+
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') runMaintenance();
+    });
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      subscription.remove();
+    };
+  }, [loaded, state.setupComplete, runDailyMaintenance]);
 
   // ── Penalty alert for missed days ──────────────────────
   useEffect(() => {
     if (!loaded || !state.setupComplete) return;
     const today = localDateString();
     if (state.lastActiveDate && state.lastActiveDate !== today) {
-      const missed = Math.floor(
-        (new Date(today).getTime() - new Date(state.lastActiveDate).getTime()) / 86400000
-      );
+      const missed = diffLocalDates(state.lastActiveDate, today);
       if (missed >= 2) {
         sendPenaltyAlert(missed);
         showAlert('PENALTY DUNGEON ACTIVATED', `You have been absent for ${missed} days. The System has noticed. The Dungeon awaits. Return now.`, 'penalty');
@@ -268,30 +311,13 @@ export default function App() {
 
   const handleCompleteDailyAll = useCallback(async () => {
     completeDailyAll();
-    showAlert('DAILY QUEST COMPLETE', 'All missions accomplished. +200 XP. Streak updated.', 'levelup');
-    
-    if (state.githubConfig) {
-      setSyncing(true);
-      const res = await pushLogToGithub({
-        ...state,
-        totalDaysCompleted: state.totalDaysCompleted + 1,
-        today: { ...state.today, allDailyCompleted: true },
-      });
-      setSyncing(false);
-      if (res.success) {
-        setAlert({
-          visible: true,
-          title: 'SYSTEM SYNCHRONIZED',
-          message: res.fileUrl
-            ? `Mission log pushed to GitHub.\n${res.fileUrl}`
-            : 'Mission log has been pushed to GitHub.',
-          type: 'quest',
-        });
-      } else {
-        setAlert({ visible: true, title: 'SYNC FAILED', message: res.error || 'Unknown error', type: 'penalty' });
-      }
-    }
-  }, [completeDailyAll, state]);
+    showAlert('DAILY QUEST COMPLETE', 'All missions accomplished. +200 XP. Streak updated. The dated log will be sealed at midnight.', 'levelup');
+  }, [completeDailyAll]);
+
+  const handleMarkRestDay = useCallback(() => {
+    markRestDay();
+    showAlert('REST DAY RECORDED', 'Today is marked as Rest Day. It will count as a calendar day and maintain your streak.', 'quest');
+  }, [markRestDay]);
 
   const handleSaveTimetable = useCallback((timetable: TimeBlock[]) => {
     setTimetable(timetable);
@@ -303,32 +329,36 @@ export default function App() {
     showAlert('TIMETABLE RESET', 'Default timetable restored.', 'system');
   }, [resetTimetable]);
 
-  const handleTestSync = useCallback(async () => {
-    if (!state.githubConfig) {
-      showAlert('SYNC FAILED', 'Configure GitHub token, owner, and repo first.', 'penalty');
+  const handleUploadLogs = useCallback(async () => {
+    setUploadingLogs(true);
+    let res;
+    try {
+      res = await uploadPendingLogs();
+    } catch (error) {
+      setUploadingLogs(false);
+      showAlert('UPLOAD FAILED', error instanceof Error ? error.message : 'Unknown upload error.', 'penalty');
+      return;
+    }
+    setUploadingLogs(false);
+
+    if (res.skippedReason) {
+      showAlert('UPLOAD PENDING', res.skippedReason, 'penalty');
       return;
     }
 
-    setTestingSync(true);
-    const res = await pushLogToGithub({
-      ...state,
-      today: { ...state.today, allDailyCompleted: true },
-    });
-    setTestingSync(false);
-
-    if (res.success) {
-      showAlert(
-        'GITHUB TEST PASSED',
-        res.fileUrl
-          ? `Log upload is working.\n${res.fileUrl}`
-          : 'Log upload is working for current configuration.',
-        'quest'
-      );
+    if (res.failed > 0) {
+      showAlert('UPLOAD INCOMPLETE', `${res.succeeded} log(s) uploaded. ${res.failed} failed and will retry later.`, 'penalty');
       return;
     }
 
-    showAlert('GITHUB TEST FAILED', res.error || 'Unknown sync error.', 'penalty');
-  }, [state]);
+    showAlert(
+      'LOG UPLOAD COMPLETE',
+      res.attempted === 0
+        ? 'No pending logs to upload.'
+        : `${res.succeeded} pending log(s) uploaded. ${res.pending} remaining.`,
+      'quest'
+    );
+  }, [uploadPendingLogs]);
 
   if (!loaded) {
     return (
@@ -395,9 +425,12 @@ export default function App() {
           {() => (
             <DailyQuestScreen
               state={state}
+              currentAppDay={currentAppDay}
+              currentPhaseDay={currentPhaseDay}
               onMarkRoutine={handleMarkRoutine}
               onCompleteExercise={handleCompleteExercise}
               onCompleteDailyAll={handleCompleteDailyAll}
+              onMarkRestDay={handleMarkRestDay}
               onLogEnergy={logEnergy}
               onLogSymptoms={logSymptoms}
               onLogSleep={logSleep}
@@ -454,8 +487,9 @@ export default function App() {
         onClose={() => setShowSettings(false)}
         onSave={setGithubConfig}
         onClear={clearGithubConfig}
-        onTestSync={handleTestSync}
-        testingSync={testingSync}
+        onUploadLogs={handleUploadLogs}
+        uploadingLogs={uploadingLogs}
+        pendingUploadCount={pendingUploadCount}
         onReset={() => {
           resetState();
           setShowSettings(false);

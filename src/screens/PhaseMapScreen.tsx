@@ -4,6 +4,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-nati
 import { COLORS, S, FONTS, RANK_COLORS } from '../theme/theme';
 import { PHASES } from '../data/phases';
 import type { PlayerState } from '../hooks/usePlayerState';
+import { getPhaseRequiredDays } from '../services/dailyLogService';
 
 interface Props {
   state: PlayerState;
@@ -22,15 +23,12 @@ export default function PhaseMapScreen({ state, onAdvancePhase }: Props) {
           const isCurrent = state.currentPhase === idx;
           const isLocked = !isCompleted && !isCurrent;
           const rankColor = RANK_COLORS[phase.rank] ?? COLORS.cyan;
-          const phaseRequiredDays = phase.durationWeeks * 7;
-          const phaseStartDayOffset = PHASES
-            .slice(0, idx)
-            .reduce((sum, item) => sum + item.durationWeeks * 7, 0);
-          const requiredDays = phaseStartDayOffset + phaseRequiredDays;
-          const phaseCompletedDays = Math.max(
-            0,
-            Math.min(phaseRequiredDays, state.totalDaysCompleted - phaseStartDayOffset)
-          );
+          const phaseRequiredDays = getPhaseRequiredDays(idx);
+          const phaseCompletedDays = isCompleted
+            ? phaseRequiredDays
+            : isCurrent
+              ? Math.max(1, Math.min(phaseRequiredDays, state.currentPhaseDay))
+              : 0;
           const phaseProgressPercent = Math.round((phaseCompletedDays / phaseRequiredDays) * 100);
 
           return (
@@ -100,22 +98,22 @@ export default function PhaseMapScreen({ state, onAdvancePhase }: Props) {
 
                 {/* Advance button */}
                 {isCurrent && idx < 18 && (
-                  state.totalDaysCompleted >= requiredDays ? (
+                  state.currentPhaseDay >= phaseRequiredDays ? (
                     <TouchableOpacity
                       style={[S.glowBtn, { marginTop: 12, borderColor: rankColor }]}
                       onPress={onAdvancePhase}
                     >
                       <Text style={[S.glowBtnText, { color: rankColor, textAlign: 'center' }]}>
-                        ADVANCE TO PHASE {idx + 1}: {PHASES[idx + 1]?.name.toUpperCase()}
+                        COMPLETE PHASE {idx} AND ENTER PHASE {idx + 1}
                       </Text>
                     </TouchableOpacity>
                   ) : (
                     <View style={{ marginTop: 12, padding: 12, backgroundColor: 'rgba(255,50,50,0.1)', borderWidth: 1, borderColor: COLORS.danger }}>
                        <Text style={{ ...FONTS.system, color: COLORS.danger, fontSize: 11, textAlign: 'center' }}>
-                         SYSTEM LOCK: REQUIRES {requiredDays} TOTAL COMPLETED DAYS
+                         SYSTEM LOCK: REQUIRES {phaseRequiredDays} CALENDAR DAYS IN THIS PHASE
                        </Text>
                        <Text style={{ ...FONTS.body, color: COLORS.textSub, fontSize: 10, textAlign: 'center', marginTop: 4 }}>
-                         Current progress: {state.totalDaysCompleted} completed days.
+                         Current phase day: {state.currentPhaseDay}. Overall app days counted: {state.totalDaysCompleted}.
                        </Text>
                     </View>
                   )

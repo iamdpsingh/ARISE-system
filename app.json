@@ -77,7 +77,9 @@
             "distPlaceholder": "package_name"
           }
         }
-      ]
+      ],
+      "expo-background-task",
+      "expo-secure-store"
     ],
     "web": {
       "favicon": "./assets/favicon.png"

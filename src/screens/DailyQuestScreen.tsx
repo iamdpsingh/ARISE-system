@@ -5,12 +5,16 @@ import { COLORS, S, FONTS } from '../theme/theme';
 import { CheckItem } from '../components/UIComponents';
 import { PHASES } from '../data/phases';
 import type { PlayerState } from '../hooks/usePlayerState';
+import { getScheduleIndexForPhaseDay } from '../services/dailyLogService';
 
 interface Props {
   state: PlayerState;
+  currentAppDay: number;
+  currentPhaseDay: number;
   onMarkRoutine: (key: 'breathingDone' | 'steamDone' | 'sunlightDone' | 'walkDone') => void;
   onCompleteExercise: (id: string, xp: number) => void;
   onCompleteDailyAll: () => void;
+  onMarkRestDay: () => void;
   onLogEnergy: (level: number) => void;
   onLogSymptoms: (val: 'ok' | 'mild' | 'bad') => void;
   onLogSleep: (hours: number) => void;
@@ -18,7 +22,7 @@ interface Props {
 }
 
 export default function DailyQuestScreen({
-  state, onMarkRoutine, onCompleteExercise, onCompleteDailyAll,
+  state, currentAppDay, currentPhaseDay, onMarkRoutine, onCompleteExercise, onCompleteDailyAll, onMarkRestDay,
   onLogEnergy, onLogSymptoms, onLogSleep, onEmergency,
 }: Props) {
   const phase = PHASES[state.currentPhase];
@@ -46,13 +50,12 @@ export default function DailyQuestScreen({
   // 1. Routine items (Breathing, Steam, etc.)
   const routineAllDone = routine.every(r => r.done);
   // 2. Training for the day (finding today's index in the schedule)
-  const currentDayIdx = new Date().getDay(); // 0 is Sunday, 1 is Monday...
-  const mappedDayIdx = phase.schedule.length > 0 ? currentDayIdx % phase.schedule.length : 0;
+  const mappedDayIdx = getScheduleIndexForPhaseDay(state.currentPhase, currentPhaseDay);
   const dayInSchedule = idxToPhaseDay(state.currentPhase, mappedDayIdx);
   const trainingKey = `day_${mappedDayIdx}`;
-  const trainingDone = !!today.questsCompleted[trainingKey] || dayInSchedule?.type === 'rest';
+  const trainingDone = !!today.questsCompleted[trainingKey] || dayInSchedule?.type === 'rest' || today.restDay;
   
-  const canCompleteDay = routineAllDone && hasWater && trainingDone;
+  const canCompleteDay = !today.restDay && routineAllDone && hasWater && trainingDone;
   const isDayFinished = today.allDailyCompleted;
 
   function idxToPhaseDay(phaseIdx: number, dayIdx: number) {
@@ -70,12 +73,35 @@ export default function DailyQuestScreen({
           <View style={S.spaceBetween}>
             <View style={{ flex: 1, paddingRight: 12 }}>
               <Text style={[S.titleText, { flexShrink: 1 }]} numberOfLines={2}>PHASE {state.currentPhase}: {phase.name.toUpperCase()}</Text>
-              <Text style={[S.subText, { flexShrink: 1 }]} numberOfLines={2}>{phase.subtitle}</Text>
+              <Text style={[S.subText, { flexShrink: 1 }]} numberOfLines={2}>
+                App Day {currentAppDay} · Phase Day {currentPhaseDay}
+              </Text>
             </View>
             <View style={styles.xpBubble}>
               <Text style={styles.xpBubbleTxt}>+{totalXpToday}</Text>
               <Text style={styles.xpBubbleLbl}>XP TODAY</Text>
             </View>
+          </View>
+        </View>
+
+        {/* ── REST DAY ─────────────────────────────── */}
+        <View style={[S.panel, today.restDay && styles.restPanelActive]}>
+          <View style={S.spaceBetween}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={S.sectionTitle}>Rest Day</Text>
+              <Text style={S.subText}>
+                Mark today as a planned recovery day. It counts for the day counter and maintains the streak.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.restBtn, today.restDay && styles.restBtnActive]}
+              disabled={today.restDay}
+              onPress={onMarkRestDay}
+            >
+              <Text style={[styles.restBtnText, today.restDay && styles.restBtnTextActive]}>
+                {today.restDay ? 'REST DAY SET' : 'MARK REST'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -159,19 +185,25 @@ export default function DailyQuestScreen({
         {/* ── TODAY'S WORKOUTS ──────────────────────── */}
         <View style={S.panel}>
           <Text style={S.sectionTitle}>Today's Training</Text>
+          <Text style={[S.subText, { marginBottom: 8 }]}>
+            Current phase session: {dayInSchedule?.label || 'Scheduled session'}
+          </Text>
           {phase.schedule.map((day, idx) => {
             const isExpanded = expandedDay === idx;
             const dayXpKey = `day_${idx}`;
             const dayDone = !!today.questsCompleted[dayXpKey];
+            const isCurrentPhaseSession = idx === mappedDayIdx;
 
             return (
-              <View key={idx} style={[styles.dayCard, dayDone && styles.dayCardDone]}>
+              <View key={idx} style={[styles.dayCard, isCurrentPhaseSession && styles.currentDayCard, dayDone && styles.dayCardDone, today.restDay && styles.dayCardRest]}>
                 <TouchableOpacity
                   onPress={() => setExpandedDay(isExpanded ? -1 : idx)}
                   style={styles.dayHeader}
                 >
                   <View style={{ flex: 1, paddingRight: 10 }}>
-                    <Text style={[styles.dayLabel, dayDone && styles.dayLabelDone, { flexShrink: 1 }]} numberOfLines={2}>{day.label}</Text>
+                    <Text style={[styles.dayLabel, dayDone && styles.dayLabelDone, { flexShrink: 1 }]} numberOfLines={2}>
+                      {isCurrentPhaseSession ? 'TODAY · ' : ''}{day.label}
+                    </Text>
                     {day.cardioNote && <Text style={[styles.cardioNote, { flexShrink: 1 }]} numberOfLines={2}>{day.cardioNote}</Text>}
                   </View>
                   <Text style={styles.dayChevron}>{isExpanded ? '▲' : '▼'}</Text>
@@ -192,7 +224,7 @@ export default function DailyQuestScreen({
                         />
                       );
                     })}
-                    {!dayDone && (
+                    {!dayDone && !today.restDay && (
                       <TouchableOpacity
                         style={[S.glowBtn, { marginTop: 12 }]}
                         onPress={() => onCompleteExercise(dayXpKey, 80)}
@@ -202,6 +234,9 @@ export default function DailyQuestScreen({
                     )}
                     {dayDone && (
                       <Text style={styles.sessionDoneLabel}>✓ SESSION COMPLETED</Text>
+                    )}
+                    {today.restDay && (
+                      <Text style={styles.restSessionLabel}>REST DAY ACTIVE - TRAINING IS PAUSED</Text>
                     )}
                   </>
                 )}
@@ -218,7 +253,14 @@ export default function DailyQuestScreen({
         )}
 
         {/* ── DAILY COMPLETION ─────────────────────── */}
-        {!isDayFinished ? (
+        {today.restDay ? (
+          <View style={[S.panel, { borderColor: COLORS.success, backgroundColor: 'rgba(0,50,0,0.1)', marginTop: 20 }]}>
+            <Text style={{ ...FONTS.system, color: COLORS.success, textAlign: 'center', fontSize: 14 }}>REST DAY RECORDED</Text>
+            <Text style={{ ...FONTS.body, color: COLORS.textSub, textAlign: 'center', fontSize: 11, marginTop: 4 }}>
+              This day will be logged as Rest Day at midnight.
+            </Text>
+          </View>
+        ) : !isDayFinished ? (
           <TouchableOpacity 
             style={[S.glowBtn, { marginTop: 20, height: 60, opacity: canCompleteDay ? 1 : 0.4 }]} 
             onPress={() => {
@@ -271,13 +313,21 @@ const styles = StyleSheet.create({
   sleepTxt: { ...FONTS.mono, color: COLORS.textSub, fontSize: 13 },
   sleepWarn: { ...FONTS.body, color: COLORS.warning, fontSize: 11, marginTop: 8, fontStyle: 'italic' },
   dayCard: { borderWidth: 1, borderColor: COLORS.borderDim, marginBottom: 8, backgroundColor: 'rgba(0,15,40,0.4)' },
+  currentDayCard: { borderColor: COLORS.cyan, backgroundColor: 'rgba(0,40,70,0.45)' },
   dayCardDone: { opacity: 0.6 },
+  dayCardRest: { opacity: 0.5 },
   dayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 },
   dayLabel: { ...FONTS.system, color: COLORS.textPrimary, fontSize: 13 },
   dayLabelDone: { textDecorationLine: 'line-through', color: COLORS.textSub },
   cardioNote: { ...FONTS.body, color: COLORS.textSub, fontSize: 11, marginTop: 2 },
   dayChevron: { color: COLORS.cyanDim, fontSize: 12 },
   sessionDoneLabel: { ...FONTS.system, color: COLORS.success, fontSize: 11, letterSpacing: 2, padding: 10, textAlign: 'center' },
+  restPanelActive: { borderColor: COLORS.success, backgroundColor: 'rgba(0,80,40,0.16)' },
+  restBtn: { borderWidth: 1, borderColor: COLORS.warning, paddingHorizontal: 12, paddingVertical: 10, minWidth: 100, alignItems: 'center' },
+  restBtnActive: { borderColor: COLORS.success, backgroundColor: 'rgba(0,255,136,0.08)' },
+  restBtnText: { ...FONTS.system, color: COLORS.warning, fontSize: 10, letterSpacing: 1 },
+  restBtnTextActive: { color: COLORS.success },
+  restSessionLabel: { ...FONTS.system, color: COLORS.warning, fontSize: 10, letterSpacing: 1, padding: 10, textAlign: 'center' },
   preSeasonNote: { borderWidth: 1, borderColor: 'rgba(255,150,0,0.3)', backgroundColor: 'rgba(255,100,0,0.06)', padding: 12, marginTop: 8 },
   preSeasonTxt: { ...FONTS.body, color: COLORS.warning, fontSize: 12, lineHeight: 18 },
 });

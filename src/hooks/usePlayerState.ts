@@ -2,9 +2,30 @@
 // ARISE: The System — Player State Hook (Core Game Engine)
 // ============================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DAILY_TIMETABLE, TimeBlock } from '../data/timetable';
+import type {
+  DailyLogEntry,
+  PhaseLogEntry,
+  UploadQueueItem,
+} from '../services/dailyLogService';
+import {
+  completeCurrentPhaseNow,
+  createDailyState,
+  creditStreakForDate,
+  getCurrentAppDay,
+  getPhaseDayForState,
+  hasMeaningfulActivity,
+  localDateString,
+  normalizeDailyState,
+  rollOverPlayerState,
+  sanitizeGithubConfig,
+  sanitizePlayerStateForStorage,
+} from '../services/dailyLogService';
+import { deleteGithubToken, saveGithubToken } from '../services/secureConfig';
+import { uploadPendingLogItems } from '../services/githubService';
+import type { UploadPendingResult } from '../services/githubService';
 
 export type StatKey = 'strength' | 'agility' | 'sense' | 'vitality' | 'intelligence';
 
@@ -47,6 +68,16 @@ export interface DailyState {
   symptomsLog: 'ok' | 'mild' | 'bad';
   xpEarnedToday: number;
   allDailyCompleted: boolean;
+  restDay: boolean;
+  restDayMarkedAt?: string;
+  streakCredited: boolean;
+}
+
+export interface GithubConfig {
+  token?: string;
+  repo: string;
+  owner: string;
+  tokenConfigured?: boolean;
 }
 
 export interface PlayerState {
@@ -61,8 +92,11 @@ export interface PlayerState {
   currentPhase: number;
   completedPhases: number[];
   totalDaysCompleted: number;
+  currentPhaseDay: number;
+  phaseStartedAt: string;
   streakDays: number;
   lastActiveDate: string;
+  lastStreakDate: string;
   shadowCount: number; // completed weeks
 
   // Stats
@@ -76,8 +110,11 @@ export interface PlayerState {
 
   // History
   weeklyXp: number[];  // last 7 days
-  history: DailyState[]; // last 30 days
-  githubConfig: { token: string; repo: string; owner: string } | null;
+  history: DailyState[]; // legacy archive kept for migration compatibility
+  dailyLogs: DailyLogEntry[];
+  phaseLogs: PhaseLogEntry[];
+  uploadQueue: UploadQueueItem[];
+  githubConfig: GithubConfig | null;
   timetable: TimeBlock[];
 }
 
@@ -96,30 +133,9 @@ const RANK_LEVELS: { level: number; rank: SystemRank; title: string }[] = [
 
 const XP_FOR_LEVEL = (level: number) => Math.floor(100 * Math.pow(1.4, level - 1));
 
-const todayStr = () => {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-};
+const todayStr = localDateString;
 
-const INITIAL_TODAY = (): DailyState => ({
-  date: todayStr(),
-  waterMl: 0,
-  targetWaterMl: 2750,
-  meals: [],
-  questsCompleted: {},
-  breathingDone: false,
-  steamDone: false,
-  sunlightDone: false,
-  walkDone: false,
-  sleepHours: 0,
-  energyLevel: 3,
-  symptomsLog: 'ok',
-  xpEarnedToday: 0,
-  allDailyCompleted: false,
-});
+const INITIAL_TODAY = (): DailyState => createDailyState(todayStr());
 
 const INITIAL_STATE: PlayerState = {
   name: '',
@@ -130,8 +146,11 @@ const INITIAL_STATE: PlayerState = {
   currentPhase: 0,
   completedPhases: [],
   totalDaysCompleted: 0,
+  currentPhaseDay: 1,
+  phaseStartedAt: todayStr(),
   streakDays: 0,
   lastActiveDate: '',
+  lastStreakDate: '',
   shadowCount: 0,
   stats: {
     strength: 5,
@@ -146,47 +165,92 @@ const INITIAL_STATE: PlayerState = {
   today: INITIAL_TODAY(),
   weeklyXp: [0, 0, 0, 0, 0, 0, 0],
   history: [],
+  dailyLogs: [],
+  phaseLogs: [],
+  uploadQueue: [],
   githubConfig: null,
   timetable: DAILY_TIMETABLE,
 };
 
-const STORAGE_KEY = 'arise_player_v2';
+export const STORAGE_KEY = 'arise_player_v2';
+
+const prepareStateForToday = (state: PlayerState): PlayerState => rollOverPlayerState(state).state;
+
+const markMeaningfulActivityForToday = (state: PlayerState): PlayerState => {
+  const prepared = prepareStateForToday(state);
+  const today = normalizeDailyState(prepared.today, todayStr());
+  if (today.streakCredited || !hasMeaningfulActivity(today)) return { ...prepared, today };
+
+  const credited = creditStreakForDate(prepared, today.date);
+  return {
+    ...credited,
+    today: { ...today, streakCredited: true },
+  };
+};
 
 export const usePlayerState = () => {
   const [state, setState] = useState<PlayerState>(INITIAL_STATE);
   const [loaded, setLoaded] = useState(false);
+  const stateRef = useRef<PlayerState>(INITIAL_STATE);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Load from storage on mount
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      if (raw) {
-        // Merge with INITIAL_STATE to handle migration for new fields
-        const parsed: PlayerState = { ...INITIAL_STATE, ...JSON.parse(raw) };
-        
-        // Ensure sub-objects also exist
-        if (!parsed.history) parsed.history = [];
-        if (!parsed.today) parsed.today = INITIAL_TODAY();
-        parsed.today = { ...INITIAL_TODAY(), ...parsed.today };
-        if (!parsed.timetable || !Array.isArray(parsed.timetable) || parsed.timetable.length === 0) {
-          parsed.timetable = DAILY_TIMETABLE;
-        }
-        
-        const today = todayStr();
+    let mounted = true;
 
-        // Daily reset if new day
-        if (parsed.today.date !== today) {
-          parsed.today = INITIAL_TODAY();
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const stored = JSON.parse(raw);
+          const migratedToken = stored?.githubConfig?.token;
+          if (migratedToken) {
+            await saveGithubToken(migratedToken);
+          }
+
+          const parsed: PlayerState = {
+            ...INITIAL_STATE,
+            ...stored,
+            today: normalizeDailyState(stored.today, todayStr()),
+            githubConfig: sanitizeGithubConfig({
+              ...stored.githubConfig,
+              tokenConfigured: Boolean(stored.githubConfig?.tokenConfigured || migratedToken),
+            }),
+            dailyLogs: Array.isArray(stored.dailyLogs) ? stored.dailyLogs : [],
+            phaseLogs: Array.isArray(stored.phaseLogs) ? stored.phaseLogs : [],
+            uploadQueue: Array.isArray(stored.uploadQueue) ? stored.uploadQueue : [],
+            history: Array.isArray(stored.history) ? stored.history : [],
+            timetable: Array.isArray(stored.timetable) && stored.timetable.length > 0 ? stored.timetable : DAILY_TIMETABLE,
+            currentPhaseDay: stored.currentPhaseDay || 1,
+            phaseStartedAt: stored.phaseStartedAt || todayStr(),
+            lastStreakDate: stored.lastStreakDate || stored.lastActiveDate || '',
+          };
+
+          const rolled = rollOverPlayerState(parsed);
+          if (mounted) {
+            stateRef.current = rolled.state;
+            setState(rolled.state);
+          }
         }
-        setState(parsed);
+      } catch (error) {
+        console.log('Failed to load ARISE state:', error);
+      } finally {
+        if (mounted) setLoaded(true);
       }
-      setLoaded(true);
-    });
+    })();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // Persist on state change
   useEffect(() => {
     if (loaded) {
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizePlayerStateForStorage(state)));
     }
   }, [state, loaded]);
 
@@ -203,11 +267,12 @@ export const usePlayerState = () => {
     let newLevelOut = 1;
 
     setState(prev => {
-      let xp = prev.xp + amount;
-      let level = prev.level;
-      let maxXp = prev.maxXp;
-      let statPoints = prev.statPoints;
-      let newShadows = prev.shadowCount;
+      const current = prepareStateForToday(prev);
+      let xp = current.xp + amount;
+      let level = current.level;
+      let maxXp = current.maxXp;
+      let statPoints = current.statPoints;
+      let newShadows = current.shadowCount;
 
       while (xp >= maxXp) {
         xp -= maxXp;
@@ -219,11 +284,11 @@ export const usePlayerState = () => {
       }
 
       const { rank, title } = getRankAndTitle(level);
-      const weeklyXp = [...prev.weeklyXp];
+      const weeklyXp = [...current.weeklyXp];
       weeklyXp[6] = (weeklyXp[6] || 0) + amount;
 
       return {
-        ...prev,
+        ...current,
         xp,
         level,
         maxXp,
@@ -233,8 +298,8 @@ export const usePlayerState = () => {
         shadowCount: newShadows,
         weeklyXp,
         today: {
-          ...prev.today,
-          xpEarnedToday: prev.today.xpEarnedToday + amount,
+          ...current.today,
+          xpEarnedToday: current.today.xpEarnedToday + amount,
         },
       };
     });
@@ -244,49 +309,60 @@ export const usePlayerState = () => {
 
   const allocateStat = useCallback((stat: StatKey) => {
     setState(prev => {
-      if (prev.statPoints <= 0) return prev;
+      const current = prepareStateForToday(prev);
+      if (current.statPoints <= 0) return current;
       return {
-        ...prev,
-        statPoints: prev.statPoints - 1,
-        stats: { ...prev.stats, [stat]: prev.stats[stat] + 1 },
+        ...current,
+        statPoints: current.statPoints - 1,
+        stats: { ...current.stats, [stat]: current.stats[stat] + 1 },
       };
     });
   }, []);
 
   const addWater = useCallback((ml: number) => {
-    setState(prev => ({
-      ...prev,
-      today: { ...prev.today, waterMl: Math.min(prev.today.waterMl + ml, 5000) },
-    }));
+    setState(prev => {
+      const current = prepareStateForToday(prev);
+      return markMeaningfulActivityForToday({
+        ...current,
+        today: { ...current.today, waterMl: Math.min(current.today.waterMl + ml, 5000) },
+      });
+    });
   }, []);
 
   const logMeal = useCallback((meal: MealLog) => {
-    setState(prev => ({
-      ...prev,
-      today: { ...prev.today, meals: [...prev.today.meals, meal] },
-    }));
+    setState(prev => {
+      const current = prepareStateForToday(prev);
+      return markMeaningfulActivityForToday({
+        ...current,
+        today: { ...current.today, meals: [...current.today.meals, meal] },
+      });
+    });
   }, []);
 
   const removeMeal = useCallback((id: string) => {
-    setState(prev => ({
-      ...prev,
-      today: { ...prev.today, meals: prev.today.meals.filter(m => m.id !== id) },
-    }));
+    setState(prev => {
+      const current = prepareStateForToday(prev);
+      return {
+        ...current,
+        today: { ...current.today, meals: current.today.meals.filter(m => m.id !== id) },
+      };
+    });
   }, []);
 
   const completeQuest = useCallback((questId: string, xpReward: number) => {
     let shouldAwardXp = false;
 
     setState(prev => {
-      if (prev.today.questsCompleted[questId]) return prev;
+      const current = prepareStateForToday(prev);
+      if (current.today.questsCompleted[questId]) return current;
       shouldAwardXp = true;
-      return {
-        ...prev,
+      return markMeaningfulActivityForToday({
+        ...current,
         today: {
-          ...prev.today,
-          questsCompleted: { ...prev.today.questsCompleted, [questId]: true },
+          ...current.today,
+          questsCompleted: { ...current.today.questsCompleted, [questId]: true },
         },
-      };
+      });
     });
 
     if (shouldAwardXp) addXp(xpReward);
@@ -296,9 +372,10 @@ export const usePlayerState = () => {
     let shouldAwardXp = false;
 
     setState(prev => {
-      if (prev.today[key]) return prev;
+      const current = prepareStateForToday(prev);
+      if (current.today[key]) return current;
       shouldAwardXp = true;
-      return { ...prev, today: { ...prev.today, [key]: true } };
+      return markMeaningfulActivityForToday({ ...current, today: { ...current.today, [key]: true } });
     });
 
     if (shouldAwardXp) addXp(25);
@@ -308,66 +385,120 @@ export const usePlayerState = () => {
     let shouldAwardXp = false;
 
     setState(prev => {
-      if (prev.today.sleepHours < 7 && hours >= 7) shouldAwardXp = true;
-      return { ...prev, today: { ...prev.today, sleepHours: hours } };
+      const current = prepareStateForToday(prev);
+      if (current.today.sleepHours < 7 && hours >= 7) shouldAwardXp = true;
+      return markMeaningfulActivityForToday({ ...current, today: { ...current.today, sleepHours: hours } });
     });
 
     if (shouldAwardXp) addXp(30);
   }, [addXp]);
 
   const logEnergy = useCallback((level: number) => {
-    setState(prev => ({ ...prev, today: { ...prev.today, energyLevel: level } }));
+    setState(prev => {
+      const current = prepareStateForToday(prev);
+      return { ...current, today: { ...current.today, energyLevel: level } };
+    });
   }, []);
 
   const logSymptoms = useCallback((val: 'ok' | 'mild' | 'bad') => {
-    setState(prev => ({ ...prev, today: { ...prev.today, symptomsLog: val } }));
+    setState(prev => {
+      const current = prepareStateForToday(prev);
+      return { ...current, today: { ...current.today, symptomsLog: val } };
+    });
   }, []);
 
   const completeDailyAll = useCallback(() => {
     let shouldAwardXp = false;
 
     setState(prev => {
-      if (prev.today.allDailyCompleted) return prev;
-
-      const today = todayStr();
-      const totalDaysCompleted = prev.totalDaysCompleted + 1;
-      const shadows = Math.floor(totalDaysCompleted / 7);
-
-      // Archive today into history (limit to 30 days)
-      const newHistory = [prev.today, ...prev.history].slice(0, 30);
+      const current = prepareStateForToday(prev);
+      if (current.today.allDailyCompleted) return current;
       shouldAwardXp = true;
-
-      return {
-        ...prev,
-        totalDaysCompleted,
-        streakDays: prev.streakDays + 1,
-        lastActiveDate: today,
-        shadowCount: shadows,
-        history: newHistory,
-        today: { ...prev.today, allDailyCompleted: true },
-      };
+      return markMeaningfulActivityForToday({
+        ...current,
+        today: { ...current.today, allDailyCompleted: true },
+      });
     });
 
     if (shouldAwardXp) addXp(200);
   }, [addXp]);
 
+  const markRestDay = useCallback(() => {
+    setState(prev => {
+      const current = prepareStateForToday(prev);
+      if (current.today.restDay) return current;
+      return markMeaningfulActivityForToday({
+        ...current,
+        today: {
+          ...current.today,
+          restDay: true,
+          restDayMarkedAt: new Date().toISOString(),
+        },
+      });
+    });
+  }, []);
+
   const setName = useCallback((name: string) => {
-    setState(prev => ({ ...prev, name, setupComplete: true }));
+    setState(prev => {
+      const current = prepareStateForToday(prev);
+      return {
+        ...current,
+        name,
+        setupComplete: true,
+        phaseStartedAt: current.phaseStartedAt || todayStr(),
+      };
+    });
   }, []);
 
   const advancePhase = useCallback(() => {
-    setState(prev => ({
-      ...prev,
-      currentPhase: Math.min(prev.currentPhase + 1, 18),
-      completedPhases: [...prev.completedPhases, prev.currentPhase],
-    }));
+    setState(prev => completeCurrentPhaseNow(prepareStateForToday(prev)).state);
     addXp(500);
   }, [addXp]);
 
   const resetState = useCallback(() => {
-    AsyncStorage.removeItem(STORAGE_KEY).then(() => {
+    Promise.all([AsyncStorage.removeItem(STORAGE_KEY), deleteGithubToken()]).then(() => {
+      stateRef.current = INITIAL_STATE;
       setState(INITIAL_STATE);
     });
+  }, []);
+
+  const runDailyMaintenance = useCallback(async (): Promise<UploadPendingResult | null> => {
+    const rolled = rollOverPlayerState(stateRef.current).state;
+    stateRef.current = rolled;
+    setState(rolled);
+    const uploadResult = await uploadPendingLogItems(rolled);
+    stateRef.current = uploadResult.state;
+    setState(uploadResult.state);
+    return uploadResult;
+  }, []);
+
+  const uploadPendingLogs = useCallback(async (): Promise<UploadPendingResult> => {
+    const rolled = rollOverPlayerState(stateRef.current).state;
+    stateRef.current = rolled;
+    const uploadResult = await uploadPendingLogItems(rolled);
+    stateRef.current = uploadResult.state;
+    setState(uploadResult.state);
+    return uploadResult;
+  }, []);
+
+  const saveGithubConfig = useCallback(async (config: GithubConfig) => {
+    if (config.token) {
+      await saveGithubToken(config.token);
+    }
+
+    setState(prev => ({
+      ...prev,
+      githubConfig: {
+        owner: config.owner.trim(),
+        repo: config.repo.trim(),
+        tokenConfigured: Boolean(config.token || prev.githubConfig?.tokenConfigured),
+      },
+    }));
+  }, []);
+
+  const clearGithubConfig = useCallback(async () => {
+    await deleteGithubToken();
+    setState(prev => ({ ...prev, githubConfig: null }));
   }, []);
 
   // Computed helpers
@@ -381,6 +512,7 @@ export const usePlayerState = () => {
     state.today.sunlightDone,
     state.today.walkDone,
   ].filter(Boolean).length;
+  const pendingUploadCount = state.uploadQueue.filter(item => item.status !== 'uploaded').length;
 
   return {
     state,
@@ -397,18 +529,24 @@ export const usePlayerState = () => {
     logEnergy,
     logSymptoms,
     completeDailyAll,
+    markRestDay,
     setName,
     advancePhase,
     resetState,
-    setGithubConfig: (config: PlayerState['githubConfig']) => setState(p => ({ ...p, githubConfig: config })),
-    clearGithubConfig: () => setState(p => ({ ...p, githubConfig: null })),
-    setTimetable: (timetable: TimeBlock[]) => setState(p => ({ ...p, timetable: timetable.map(item => ({ ...item })) })),
-    resetTimetable: () => setState(p => ({ ...p, timetable: DAILY_TIMETABLE.map(item => ({ ...item })) })),
+    runDailyMaintenance,
+    uploadPendingLogs,
+    setGithubConfig: saveGithubConfig,
+    clearGithubConfig,
+    setTimetable: (timetable: TimeBlock[]) => setState(p => ({ ...prepareStateForToday(p), timetable: timetable.map(item => ({ ...item })) })),
+    resetTimetable: () => setState(p => ({ ...prepareStateForToday(p), timetable: DAILY_TIMETABLE.map(item => ({ ...item })) })),
     // Computed
     todayCalories,
     todayProtein,
     waterPercent,
     xpPercent,
     routinesDone,
+    currentAppDay: getCurrentAppDay(state),
+    currentPhaseDay: getPhaseDayForState(state),
+    pendingUploadCount,
   };
 };

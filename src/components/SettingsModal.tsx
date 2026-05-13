@@ -5,30 +5,37 @@ import { COLORS, FONTS, S } from '../theme/theme';
 interface Props {
   visible: boolean;
   onClose: () => void;
-  config: { token: string; repo: string; owner: string } | null;
-  onSave: (config: { token: string; repo: string; owner: string }) => void;
-  onClear: () => void;
+  config: { repo: string; owner: string; tokenConfigured?: boolean } | null;
+  onSave: (config: { token?: string; repo: string; owner: string }) => Promise<void>;
+  onClear: () => void | Promise<void>;
   onReset: () => void;
-  onTestSync: () => void;
-  testingSync: boolean;
+  onUploadLogs: () => void;
+  uploadingLogs: boolean;
+  pendingUploadCount: number;
 }
 
-export default function SettingsModal({ visible, onClose, config, onSave, onClear, onReset, onTestSync, testingSync }: Props) {
-  const [token, setToken] = useState(config?.token || '');
+export default function SettingsModal({ visible, onClose, config, onSave, onClear, onReset, onUploadLogs, uploadingLogs, pendingUploadCount }: Props) {
+  const [token, setToken] = useState('');
   const [repo, setRepo] = useState(config?.repo || '');
   const [owner, setOwner] = useState(config?.owner || '');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
-    setToken(config?.token || '');
+    setToken('');
     setRepo(config?.repo || '');
     setOwner(config?.owner || '');
-  }, [visible, config?.token, config?.repo, config?.owner]);
+  }, [visible, config?.repo, config?.owner]);
 
-  const handleSave = () => {
-    if (!token || !repo || !owner) return;
-    onSave({ token, repo, owner });
-    onClose();
+  const handleSave = async () => {
+    if (!repo || !owner || (!token && !config?.tokenConfigured)) return;
+    setSaving(true);
+    try {
+      await onSave({ token: token || undefined, repo, owner });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -51,12 +58,12 @@ export default function SettingsModal({ visible, onClose, config, onSave, onClea
               style={styles.input}
               value={token}
               onChangeText={setToken}
-              placeholder="ghp_..."
+              placeholder={config?.tokenConfigured ? 'Token saved securely - leave blank to keep' : 'ghp_...'}
               placeholderTextColor={COLORS.textDim}
               secureTextEntry
               autoCapitalize="none"
             />
-            <Text style={S.dimText}>Requires 'repo' scope. Stored only on your device.</Text>
+            <Text style={S.dimText}>Requires repo scope. Stored in the device secure store, not in app source or AsyncStorage.</Text>
 
             <Text style={[styles.label, { marginTop: 16 }]}>GITHUB OWNER (USERNAME)</Text>
             <TextInput
@@ -80,8 +87,8 @@ export default function SettingsModal({ visible, onClose, config, onSave, onClea
             <Text style={S.dimText}>The repo must already exist on your GitHub.</Text>
 
             <View style={styles.btnRow}>
-              <TouchableOpacity style={[S.glowBtn, { flex: 1 }]} onPress={handleSave}>
-                <Text style={S.glowBtnText}>SYNCHRONIZE SYSTEM</Text>
+              <TouchableOpacity style={[S.glowBtn, { flex: 1, opacity: saving ? 0.6 : 1 }]} onPress={handleSave} disabled={saving}>
+                <Text style={S.glowBtnText}>{saving ? 'SAVING...' : 'SAVE GITHUB CONFIG'}</Text>
               </TouchableOpacity>
               
               {config && (
@@ -92,13 +99,13 @@ export default function SettingsModal({ visible, onClose, config, onSave, onClea
             </View>
             <TouchableOpacity
               style={[S.glowBtn, { marginTop: 10, opacity: config ? 1 : 0.4 }]}
-              onPress={onTestSync}
-              disabled={!config || testingSync}
+              onPress={onUploadLogs}
+              disabled={!config || uploadingLogs}
             >
-              <Text style={S.glowBtnText}>{testingSync ? 'TESTING GITHUB UPLOAD...' : 'TEST LOG UPLOAD NOW'}</Text>
+              <Text style={S.glowBtnText}>{uploadingLogs ? 'UPLOADING LOGS...' : `UPLOAD LOGS (${pendingUploadCount} PENDING)`}</Text>
             </TouchableOpacity>
             <Text style={[S.dimText, { marginTop: 8 }]}>
-              This uploads/updates today's mission log in your configured GitHub repo.
+              This uploads pending daily and phase logs. Existing dated files are updated instead of duplicated.
             </Text>
 
             <View style={[styles.infoBox, { borderColor: COLORS.danger, marginTop: 40 }]}>
@@ -117,11 +124,11 @@ export default function SettingsModal({ visible, onClose, config, onSave, onClea
             <View style={styles.infoBox}>
               <Text style={styles.infoTitle}>Why GitHub?</Text>
               <Text style={styles.infoText}>
-                The System keeps your records for 30 days locally. To ensure your journey to Shadow Monarch is 
-                immortalized, the GitHub integration pushes a Markdown journal entry every day you complete your quests.
+                The System keeps active-phase daily logs locally, then preserves phase summary logs after phase completion.
+                GitHub keeps daily logs and phase summaries phase-wise.
               </Text>
               <Text style={[styles.infoText, { marginTop: 8, color: COLORS.success, ...FONTS.system, fontSize: 9 }]}>
-                🔒 SECURITY: Tokens entered here are stored ONLY on this device. They are NEVER bundled into the app code or shared.
+                SECURITY: Tokens entered here are stored only in SecureStore. They are never bundled into app code or committed.
               </Text>
             </View>
           </ScrollView>

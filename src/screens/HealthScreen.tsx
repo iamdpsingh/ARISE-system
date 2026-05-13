@@ -53,7 +53,8 @@ export default function HealthScreen({ state }: Props) {
             { label: 'Current Phase', value: `Phase ${state.currentPhase} — ${['Emergency Recovery','Foundation','Sleeper Build I','Sleeper Build II','Calisthenics Core','Pull Mastery','Push Mastery','Leg Mastery','Full Body Power','Elite Body','The Awakened'][state.currentPhase]}`, color: COLORS.cyan },
             { label: 'Current Level', value: `Level ${state.level}`, color: COLORS.xp },
             { label: 'Current Rank', value: state.rank, color: COLORS.rankS },
-            { label: 'Total Days Completed', value: String(state.totalDaysCompleted), color: COLORS.success },
+            { label: 'App Day Counter', value: String(state.totalDaysCompleted + 1), color: COLORS.success },
+            { label: 'Current Phase Day', value: String(state.currentPhaseDay), color: COLORS.cyan },
             { label: 'Current Streak', value: `${state.streakDays} days 🔥`, color: COLORS.warning },
             { label: 'Shadow Count', value: `${state.shadowCount} shadows`, color: COLORS.purple },
           ].map(item => (

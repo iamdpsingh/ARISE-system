@@ -145,7 +145,10 @@ export default function StatusScreen({ state, xpPercent, onAllocate, onToggleSet
         <View style={[S.panel, S.center]}>
           <StreakBadge streak={state.streakDays} />
           <Text style={[S.subText, { marginTop: 8 }]}>
-            Total days completed: {state.totalDaysCompleted}
+            App day counter: {state.totalDaysCompleted + 1}
+          </Text>
+          <Text style={S.subText}>
+            Phase day: {state.currentPhaseDay}
           </Text>
         </View>
 

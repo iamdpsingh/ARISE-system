@@ -10,9 +10,12 @@ Repository: https://github.com/iamdpsingh/ARISE-system
 - Solo Leveling themed system UI (status, quests, phases, health, history)
 - Separate Timetable tab with full add/edit/remove/reset controls
 - Daily routine + workout completion with XP/level system
+- Calendar-based day counter that advances after midnight even when targets are missed
+- Rest Day support with streak preservation and phase summary tracking
+- Active-phase daily logs, phase overall logs, and retry-safe GitHub log uploads
 - Phase map with locked phase preview (details visible before unlock)
 - Missed day does not reset whole progression anymore
-- GitHub mission log upload with in-app "Test Log Upload Now"
+- GitHub mission log upload with in-app "Upload Logs"
 - Home-screen widgets:
   - Status
   - Quest
@@ -28,6 +31,8 @@ Repository: https://github.com/iamdpsingh/ARISE-system
 - React Navigation
 - AsyncStorage
 - Expo Notifications
+- Expo Background Task / Task Manager
+- Expo SecureStore
 - `@bittingz/expo-widgets`
 
 ## Project Structure
@@ -71,7 +76,7 @@ npm install
 npx expo start
 ```
 
-## GitHub Log Sync (In-App)
+## Daily Logs And GitHub Log Sync
 
 No PAT is hardcoded in source.
 
@@ -80,7 +85,19 @@ Configure from app settings:
 2. GitHub owner (username/org)
 3. Repository name
 
-Then tap `TEST LOG UPLOAD NOW` to verify upload.
+Daily logs are generated at day rollover for the day that just ended. The app uses a pending upload queue, so logs are not lost if the app is closed, the phone restarts, the network is down, or GitHub upload fails.
+
+Then tap `UPLOAD LOGS` to upload/retry pending logs manually.
+
+Local behavior:
+- Active phase daily logs are visible in the app.
+- When a phase completes, an overall phase log is kept locally.
+- Daily logs from that completed phase are removed from the local log display after the phase log is created.
+
+GitHub behavior:
+- Daily logs are uploaded under `logs/phase_XX/daily/YYYY-MM-DD.md`.
+- Phase summaries are uploaded under `logs/phase_XX/`.
+- Existing dated files are updated in place instead of duplicated.
 
 ## Build Prerequisites
 
@@ -89,6 +106,7 @@ Then tap `TEST LOG UPLOAD NOW` to verify upload.
 - EAS login required: `eas login`
 - Java 17 required
 - Android SDK required (with `platform-tools`, platform API, and build-tools)
+- If the SDK is not in the default macOS location, export `ANDROID_HOME` and `ANDROID_SDK_ROOT` to your local SDK root before running Gradle/EAS.
 
 Build command:
 
@@ -114,5 +132,6 @@ eas build -p ios --profile preview
 ## Security Notes
 
 - Never commit `.env`, `secrets.json`, tokens, keys, or provisioning files
+- GitHub tokens are stored with Expo SecureStore on device, not in source or AsyncStorage
 - This repo keeps user secrets out of versioned source by design
 - `.gitignore` already blocks common secret files
